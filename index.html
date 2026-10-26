@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BA Planner</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== Menu bên trái ===== -->
+  <aside class="sb">
+    <div class="brand"><div class="logo">🎯</div><div><b>BA Planner</b><small>Ưu tiên · Tập trung · Lên kế hoạch</small></div></div>
+    <nav>
+      <div class="grp">📊 Phân tích</div>
+      <a href="#matrix" data-r="matrix" class="sub">🧭 Ma trận 4 ô</a>
+      <a href="#pareto" data-r="pareto" class="sub">⭐ Phân tích 80/20</a>
+      <a href="#plan" data-r="plan" class="top">📅 Kế hoạch</a>
+      <a href="#report" data-r="report" class="top2">📈 Báo cáo</a>
+    </nav>
+    <div class="sbfoot">
+      <div class="ver">Bản 1.5 · kho việc ghim / đóng mở</div>
+      <button id="exp">⬇ Xuất dữ liệu</button>
+      <button id="imp">⬆ Nhập dữ liệu</button>
+      <button id="clr">🧹 Xóa việc đã xong</button>
+    </div>
+  </aside>
+
+  <!-- ===== Nội dung ===== -->
+  <main class="main">
+    <header class="phead">
+      <div><h2 id="pTitle"></h2><p id="pSub"></p></div>
+      <div class="stats" id="stats">
+        <div class="stat"><b id="stOpen">0</b><span>Việc đang mở</span></div>
+        <div class="stat"><b id="stQ1">0</b><span>🔥 Làm ngay</span></div>
+        <div class="stat red"><b id="stLate">0</b><span>⏰ Quá hạn</span></div>
+        <div class="stat star"><b id="stStar">0</b><span>⭐ Trọng tâm</span></div>
+      </div>
+    </header>
+
+    <!-- thêm việc (chỉ ở trang Phân tích) -->
+    <form class="add" id="f">
+      <div class="addrow">
+        <span class="plus">＋</span>
+        <input type="text" id="title" placeholder="Gõ tên việc rồi Enter — phần còn lại để máy tự xếp…" required autocomplete="off">
+        <button type="button" id="bulk">Dán nhiều việc</button>
+        <button class="primary go">Thêm</button>
+      </div>
+      <details class="opts"><summary>Tùy chọn nâng cao (không bắt buộc)</summary>
+        <div class="optgrid">
+          <label>Hạn chót<input type="date" id="due"></label>
+          <label>Gấp?<select id="urg"><option value="">🤖 Tự đoán</option><option value="1">Gấp</option><option value="0">Không gấp</option></select></label>
+          <label>Quan trọng?<select id="imp2"><option value="">🤖 Tự đoán</option><option value="1">Quan trọng</option><option value="0">Không quan trọng</option></select></label>
+          <label>Tác động<select id="impact"><option value="auto" selected>🤖 Tự đoán</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+          <label>Công sức<select id="effort"><option value="auto" selected>🤖 Tự đoán</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+          <label class="wide2">Mô tả<input type="text" id="desc" placeholder="Ghi chú ngắn về việc (không bắt buộc)" autocomplete="off"></label>
+          <label class="chk"><input type="checkbox" id="autoplace" checked> Tự xếp vào ô</label>
+          <p class="hintline">Chỉ cần nhập hạn chót nếu có — đó là tín hiệu mạnh nhất để biết việc nào gấp.</p>
+        </div>
+      </details>
+    </form>
+
+    <!-- Trang 1: Ma trận 4 ô -->
+    <section id="page-matrix" class="page">
+      <div class="axis">
+        <div></div><div class="h">GẤP</div><div class="h">KHÔNG GẤP</div>
+        <div class="v">QUAN TRỌNG</div><div class="quad q1" data-q="1"></div><div class="quad q2" data-q="2"></div>
+        <div class="v">ÍT QUAN TRỌNG</div><div class="quad q3" data-q="3"></div><div class="quad q4" data-q="4"></div>
+      </div>
+      <div class="quad q0" data-q="0"></div>
+      <div class="hint">Kéo thả thẻ giữa các ô để đổi phân loại · bấm chip Gấp / Quan trọng để đổi nhanh · ⭐ = nhóm “ít mà chất” theo 80/20 · 🤖 = máy tự đoán, bấm chọn số để tự đặt.</div>
+    </section>
+
+    <!-- Trang 2: Phân tích 80/20 -->
+    <section id="page-pareto" class="page" hidden>
+      <div class="kpis" id="kpis"></div>
+      <div class="box"><h3>Biểu đồ Pareto</h3><div id="chart"></div></div>
+      <div class="box"><h3>Xếp hạng theo hiệu quả (tác động ÷ công sức)</h3><div id="plist"></div>
+        <div class="hint">Cộng dồn từ trên xuống tới khi đạt 80% tổng tác động là nhóm trọng tâm — đường đỏ đứt nét là điểm cắt. 80/20 chỉ xét các việc ma trận đã xác nhận là quan trọng (ô 🔥 và 📅).</div></div>
+    </section>
+
+    <!-- Trang 3: Kế hoạch (người dùng tự nhập) -->
+    <section id="page-plan" class="page" hidden>
+      <div class="ptool">
+        <div class="pbar" id="pbarPlan"></div>
+        <div class="pset">
+          <button id="bkToggle" class="bktog">📥 Kho việc</button>
+          <label>Giờ tập trung/ngày <input type="number" min="1" max="12" step="0.5" id="setCap"></label>
+          <span>Hiện: <label><input type="checkbox" data-day="1">T2</label> <label><input type="checkbox" data-day="2">T3</label> <label><input type="checkbox" data-day="3">T4</label> <label><input type="checkbox" data-day="4">T5</label> <label><input type="checkbox" data-day="5">T6</label> <label><input type="checkbox" data-day="6">T7</label> <label><input type="checkbox" data-day="0">CN</label></span>
+          <button data-copy>📋 Sao chép kế hoạch tuần</button>
+        </div>
+      </div>
+      <div class="psum" id="planSum"></div>
+      <div class="warnbox" id="planWarn"></div>
+      <div class="plan-layout" id="planLayout">
+        <aside class="backlog">
+          <div class="bkhead"><div class="bkt"><h3>Kho việc</h3><span class="bkbtns"><button type="button" id="bkPin">📌</button><button type="button" id="bkClose" title="Đóng kho việc">✕</button></span></div>
+            <p class="sub">Việc từ phân tích hoặc thêm tay. Bấm vào một việc để xem chi tiết &amp; xếp lịch trong cùng một hộp thoại, hoặc kéo thẳng sang ngày bên phải.</p>
+            <form class="bkadd" id="bkForm"><input type="text" id="bkTitle" placeholder="＋ Thêm việc nhanh (không cần phân tích)…" autocomplete="off"><button type="button" id="bkMore" title="Nhập đầy đủ: mô tả, hạn chót, lặp lại…">Chi tiết…</button></form>
+            <label class="chk"><input type="checkbox" id="bkAll"> Hiện cả việc ở ô 🗑 / 🤔</label></div>
+          <div id="backlog"></div>
+        </aside>
+        <div class="pview" id="planView"></div>
+      </div>
+      <div class="hint">Kế hoạch do bạn tự lập: kéo việc từ kho vào ngày, hoặc bấm “＋ Thêm việc” để nhập việc riêng (họp, việc ngoài danh sách…). Kéo khối sang ngày khác để dời lịch · bấm vào tên để sửa giờ/ghi chú · tick để đánh dấu xong (đồng bộ với danh sách phân tích). Ở chế độ Tháng/Năm, bấm một ngày để xem chi tiết.</div>
+    </section>
+
+    <!-- Trang 4: Báo cáo -->
+    <section id="page-report" class="page" hidden>
+      <div class="ptool">
+        <div class="pbar" id="pbarReport"></div>
+        <div class="pset"><button id="rep-csv">⬇ Xuất CSV</button></div>
+      </div>
+      <div id="reportBody"></div>
+    </section>
+  </main>
+</div>
+
+<!-- Dán nhiều việc -->
+<dialog id="dlg">
+  <b>Dán danh sách việc (mỗi dòng một việc)</b>
+  <textarea id="bulkText" rows="10" placeholder="Dev hỏi luồng thanh toán&#10;Viết FRD module báo cáo&#10;Log time Redmine&#10;Học CBAP"></textarea>
+  <div class="dlgfoot"><button type="button" id="bulkCancel">Hủy</button><button type="button" class="primary" id="bulkOk">Thêm &amp; tự xếp</button></div>
+</dialog>
+
+<!-- Hộp thoại duy nhất: thêm việc · chi tiết (mô tả, deadline) · lên kế hoạch · lặp định kỳ -->
+<dialog id="dlgT">
+  <form id="tForm">
+    <b id="tHead">Chi tiết công việc</b>
+    <input type="hidden" id="tId"><input type="hidden" id="tEntry">
+    <div class="eg">
+      <label class="wide">Tên việc<input type="text" id="tTitle" required autocomplete="off"></label>
+      <label class="wide">Mô tả<textarea id="tDesc" rows="3" placeholder="Việc cần làm cụ thể, đầu ra, lưu ý…"></textarea></label>
+      <label>Hạn chót (deadline)<input type="date" id="tDue"></label>
+      <label>Giờ dự kiến<input type="number" id="tHours" min="0" step="0.5" placeholder="tự theo công sức"></label>
+      <label class="wide chk"><input type="checkbox" id="tNoA"> Việc đơn giản — không cần phân tích (chỉ đưa vào kho & kế hoạch)</label>
+      <div class="wide eg2" id="tAnalysis">
+        <label>Tác động<select id="tImpact"><option value="auto">🤖 Tự đoán</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+        <label>Công sức<select id="tEffort"><option value="auto">🤖 Tự đoán</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+      </div>
+      <fieldset class="wide rec"><legend>📅 Kế hoạch thực hiện</legend>
+        <div class="recrow"><label><input type="checkbox" id="pOn"> <span id="pLabel">Đưa vào kế hoạch</span></label><span class="sub" id="pInfo"></span></div>
+        <div class="recrow" id="pFields"><label>Ngày thực hiện<input type="date" id="pDate"></label><label class="pnote">Ghi chú<input type="text" id="pNote" autocomplete="off" placeholder="không bắt buộc"></label></div>
+      </fieldset>
+      <fieldset class="wide rec"><legend>🔁 Lặp lại định kỳ</legend>
+        <div class="recrow">
+          <label>Tần suất<select id="rFreq"><option value="">Không lặp</option><option value="daily">Hằng ngày</option><option value="weekly">Hằng tuần</option><option value="monthly">Hằng tháng</option><option value="yearly">Hằng năm</option></select></label>
+          <label class="recn" id="rNL">Mỗi <input type="number" id="rN" min="1" max="52" value="1"> <span id="rUnit">tuần</span></label>
+        </div>
+        <div class="recrow" id="rDowsW"><span class="sub">Vào các thứ:</span>
+          <label><input type="checkbox" data-rdow="1">T2</label><label><input type="checkbox" data-rdow="2">T3</label><label><input type="checkbox" data-rdow="3">T4</label><label><input type="checkbox" data-rdow="4">T5</label><label><input type="checkbox" data-rdow="5">T6</label><label><input type="checkbox" data-rdow="6">T7</label><label><input type="checkbox" data-rdow="0">CN</label>
+          <button type="button" id="rWk">T2–T6</button></div>
+        <div class="recrow" id="rDomW"><label>Vào ngày <input type="number" id="rDom" min="1" max="31"> hằng tháng <span class="sub">(tháng ngắn hơn thì lấy ngày cuối tháng)</span></label></div>
+        <div class="recrow" id="rRange"><label>Bắt đầu từ<input type="date" id="rStart"></label><label>Kết thúc (không bắt buộc)<input type="date" id="rUntil"></label></div>
+        <p class="sub" id="rHint"></p>
+      </fieldset>
+    </div>
+    <div class="dlgfoot"><button type="button" id="tDel" class="danger">Xóa việc</button><button type="button" id="tUnplan">Gỡ khỏi kế hoạch</button><span style="flex:1"></span><button type="button" id="tCancel">Hủy</button><button class="primary">Lưu</button></div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
