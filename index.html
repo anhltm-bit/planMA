@@ -20,7 +20,7 @@
       <a href="#report" data-r="report" class="top2">📈 Báo cáo</a>
     </nav>
     <div class="sbfoot">
-      <div class="ver">Bản 1.5 · kho việc ghim / đóng mở</div>
+      <div class="ver">Bản 1.9 · giờ dự kiến suy ra từ giờ làm</div>
       <button id="exp">⬇ Xuất dữ liệu</button>
       <button id="imp">⬆ Nhập dữ liệu</button>
       <button id="clr">🧹 Xóa việc đã xong</button>
@@ -133,7 +133,10 @@
       <label class="wide">Tên việc<input type="text" id="tTitle" required autocomplete="off"></label>
       <label class="wide">Mô tả<textarea id="tDesc" rows="3" placeholder="Việc cần làm cụ thể, đầu ra, lưu ý…"></textarea></label>
       <label>Hạn chót (deadline)<input type="date" id="tDue"></label>
-      <label>Giờ dự kiến<input type="number" id="tHours" min="0" step="0.5" placeholder="tự theo công sức"></label>
+      <label>Trạng thái<select id="tStatus"><option value="todo">○ Chưa bắt đầu</option><option value="doing">◐ Đang làm</option><option value="wait">⏸ Chờ / vướng</option><option value="done">✔ Hoàn thành</option></select></label>
+      <label>Giờ dự kiến (tổng)<input type="number" id="tHours" min="0" step="0.25" placeholder="tự theo công sức"><small class="sub" id="hHint"></small></label>
+      <div class="wide timerow"><label>Từ giờ <span class="sub">(nếu có)</span><input type="time" id="tTs"></label><label>Đến giờ<input type="time" id="tTe"></label>
+        <span class="sub">Việc có giờ cố định sẽ xếp lên đầu ngày theo thứ tự giờ. Có “Từ giờ – Đến giờ” thì giờ dự kiến tự suy ra; không có thì bạn nhập số giờ. Việc lặp định kỳ dùng chung khung giờ này.</span></div>
       <label class="wide chk"><input type="checkbox" id="tNoA"> Việc đơn giản — không cần phân tích (chỉ đưa vào kho & kế hoạch)</label>
       <div class="wide eg2" id="tAnalysis">
         <label>Tác động<select id="tImpact"><option value="auto">🤖 Tự đoán</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
@@ -141,7 +144,8 @@
       </div>
       <fieldset class="wide rec"><legend>📅 Kế hoạch thực hiện</legend>
         <div class="recrow"><label><input type="checkbox" id="pOn"> <span id="pLabel">Đưa vào kế hoạch</span></label><span class="sub" id="pInfo"></span></div>
-        <div class="recrow" id="pFields"><label>Ngày thực hiện<input type="date" id="pDate"></label><label class="pnote">Ghi chú<input type="text" id="pNote" autocomplete="off" placeholder="không bắt buộc"></label></div>
+        <div class="recrow" id="pFields"><label>Từ ngày<input type="date" id="pDate"></label><label>Đến ngày <span class="sub">(nếu làm nhiều ngày)</span><input type="date" id="pEnd"></label><label class="pnote">Ghi chú<input type="text" id="pNote" autocomplete="off" placeholder="không bắt buộc"></label>
+          <p class="sub" style="flex:1 1 100%;margin:0">Việc làm nhiều ngày: giờ dự kiến được chia đều cho các ngày làm việc trong khoảng. Trong mỗi ngày, việc quan trọng và ⭐ 80/20 tự xếp lên đầu.</p></div>
       </fieldset>
       <fieldset class="wide rec"><legend>🔁 Lặp lại định kỳ</legend>
         <div class="recrow">

@@ -178,7 +178,7 @@ function materialize(f, t) {
     if (!x.rec || !x.rec.freq || x.done) return;
     recDates(x.rec, f, t).forEach(k => {
       if (have.has(x.id + '|' + k)) return;
-      plan.push({ id: uid(), taskId: x.id, title: x.title, date: k, ro: k, hours: x.rec.hours || hOf(x), note: '', done: false, doneAt: '' }); changed = true;
+      plan.push({ id: uid(), taskId: x.id, title: x.title, date: k, ro: k, hours: x.rec.hours || timeHours(x.ts, x.te) || hOf(x), ts: x.ts || '', te: x.te || '', note: '', status: 'todo', done: false, doneAt: '' }); changed = true;
     });
   });
   if (changed) LS.set('bap.plan', plan);
@@ -216,7 +216,7 @@ function cardHTML(t, vital) {
       <span class="chip ${t.urgent ? 'y' : 'n'}" data-tog="${t.id}" data-f="urgent">${flag(t.urgent, 'Gấp', 'Không gấp')}</span>
       <span class="chip imp ${t.important ? 'y' : 'n'}" data-tog="${t.id}" data-f="important">${flag(t.important, 'Quan trọng', 'Ít quan trọng')}</span>
       <span class="score">Tác động ${sel('impact')}</span><span class="score">Công sức ${sel('effort')}</span>
-      ${t.rec ? `<span class="rectag" title="Việc lặp định kỳ">🔁 ${recText(t.rec)}</span>` : ''}${dueInfo(t)}</div>${auto || sugHTML(t)}</div>`;
+      ${stChip(t, 'data-tstcycle')}${t.rec ? `<span class="rectag" title="Việc lặp định kỳ">🔁 ${recText(t.rec)}</span>` : ''}${dueInfo(t)}</div>${auto || sugHTML(t)}</div>`;
 }
 function renderMatrix() {
   const { vital } = pareto();
@@ -327,7 +327,59 @@ function applyBK(n) {
 const isWork = d => SET.days.includes(d.getDay());
 const nextWork = d => { let x = new Date(d); for (let i = 0; i < 14 && !isWork(x); i++) x = addD(x, 1); return x; };
 const taskOf = id => tasks.find(t => t.id === id);
-const hrsOf = list => (list || []).reduce((s, e) => s + (e.hours || 0), 0);
+/* ----- trạng thái công việc ----- */
+const STATUS = { todo: ['Chưa bắt đầu', '○'], doing: ['Đang làm', '◐'], wait: ['Chờ / vướng', '⏸'], done: ['Hoàn thành', '✔'] };
+const STORDER = ['todo', 'doing', 'wait', 'done'];
+const stOf = o => o.status || (o.done ? 'done' : 'todo');
+const setStatus = (o, s) => { o.status = s; o.done = s === 'done'; o.doneAt = o.done ? (o.doneAt || ymd(new Date())) : ''; };
+const setDone = (o, v) => setStatus(o, v ? 'done' : (stOf(o) === 'done' ? 'todo' : stOf(o)));
+const stChip = (o, attr) => `<span class="st st-${stOf(o)}" ${attr}="${o.id}" title="Bấm để đổi trạng thái">${STATUS[stOf(o)][1]} ${STATUS[stOf(o)][0]}</span>`;
+/* đổi trạng thái của một việc → các mục kế hoạch của việc (không lặp) đi theo */
+function setTaskStatus(x, s) { setStatus(x, s); if (!x.rec) plan.filter(p => p.taskId === x.id).forEach(p => setStatus(p, s)); }
+function syncTask(taskId) {
+  const x = taskOf(taskId); if (!x || x.rec) return;
+  const es = plan.filter(e => e.taskId === taskId); if (!es.length) return;
+  setStatus(x, es.every(e => e.done) ? 'done' : es.some(e => stOf(e) === 'doing') ? 'doing' : es.some(e => stOf(e) === 'wait') ? 'wait' : (stOf(x) === 'done' ? 'todo' : stOf(x)));
+}
+
+/* ----- việc làm nhiều ngày: một mục kế hoạch có thể kéo dài từ ngày bắt đầu đến ngày kết thúc ----- */
+/* giờ làm trong ngày (không bắt buộc): ts = từ giờ, te = đến giờ, dạng "HH:MM" */
+const toMin = t => { const [h, m] = t.split(':'); return +h * 60 + +m; };
+const timeHours = (a, b) => a && b && b > a ? (toMin(b) - toMin(a)) / 60 : 0;
+const timeTxt = o => o.ts ? o.ts + (o.te ? '–' + o.te : '') : '';
+const hrsOf = list => (list || []).reduce((s, i) => s + (i.h != null ? i.h : (i.hours || 0)), 0);
+function entDates(e) {
+  const end = e.end && e.end > e.date ? e.end : e.date;
+  if (end === e.date) return [e.date];
+  return datesIn(e.date, end, 120).filter((k, i) => i === 0 || isWork(pd(k)));      // chỉ tính các ngày làm việc
+}
+const partsOf = e => { const ds = entDates(e), h = (e.hours || 0) / ds.length; return ds.map((k, i) => ({ e, k, i: i + 1, n: ds.length, h })); };
+function shiftEntry(e, nd) { const delta = Math.round((pd(nd) - pd(e.date)) / 864e5); if (e.end) e.end = ymd(addD(pd(e.end), delta)); e.date = nd; }
+/* thứ tự trong một ngày: việc quan trọng + ⭐ 80/20 + hạn gần lên đầu; đang làm trước, chờ lùi xuống, đã xong xuống cuối */
+function entRank(it, P) {
+  const e = it.e, x = e.taskId && taskOf(e.taskId), q = x ? quadOf(x) : -1;
+  let s = { 1: 0, 2: 100, '-1': 150, 3: 200, 4: 300, 0: 350 }[q] ?? 150;
+  if (x) {
+    if (P.vital.has(x.id)) s -= 40;
+    s -= Math.min(10, x.impact / x.effort) * 3;
+    if (x.due) { const d = daysTo(x.due); s -= d <= 0 ? 50 : d <= 2 ? 35 : d <= 7 ? 15 : 0; }
+  }
+  if (e.ts) s = -500 + toMin(e.ts) / 10;               // việc có giờ cố định: xếp theo giờ, nằm trên cùng
+  const st = stOf(e);
+  if (st === 'done') s += 1000; else if (st === 'wait') s += 60; else if (st === 'doing') s -= 10;
+  return s;
+}
+function buildBy(P) {
+  const by = {};
+  plan.forEach(e => partsOf(e).forEach(p => (by[p.k] = by[p.k] || []).push(p)));
+  Object.values(by).forEach(l => {
+    l.sort((a, b) => entRank(a, P) - entRank(b, P));
+    /* báo trùng giờ giữa các việc có giờ bắt đầu - kết thúc trong cùng ngày */
+    const tm = l.filter(i => i.e.ts && i.e.te && !i.e.done).sort((a, b) => toMin(a.e.ts) - toMin(b.e.ts));
+    for (let i = 1; i < tm.length; i++) if (toMin(tm[i].e.ts) < toMin(tm[i - 1].e.te)) tm[i].clash = tm[i - 1].clash = true;
+  });
+  return by;
+}
 const BG = [[1, '🔥 Làm ngay'], [2, '📅 Lên lịch'], [3, '🤝 Ủy quyền / làm gộp'], [4, '🗑 Để sau / bỏ'], [0, '🤔 Cần nghĩ thêm']];
 
 function renderPlan() {
@@ -344,7 +396,7 @@ function renderPlan() {
   const back = tasks.filter(x => !x.done && !x.hid).sort((a, b) => rank(a) - rank(b));
   const bk = x => { const pl = planned[x.id];
     return `<div class="bk ${qcls(quadOf(x))} ${pl && !x.rec ? 'planned' : ''}" draggable="true" data-bk="${x.id}" data-addbk="${x.id}" title="Bấm để xem chi tiết & xếp lịch · hoặc kéo sang ngày">
-      <div class="bt">${P.vital.has(x.id) ? '⭐ ' : ''}${x.rec ? '🔁 ' : ''}${esc(x.title)}<small>${[x.rec ? recText(x.rec) : '', '~' + fmtH(hOf(x)), x.due ? 'hạn ' + fmtD(x.due) : '', pl && !x.rec ? '✓ đã xếp ' + pl.map(fmtD).join(', ') : ''].filter(Boolean).join(' · ')}</small>${x.desc ? `<small class="bdesc">${esc(x.desc)}</small>` : ''}</div>
+      <div class="bt">${P.vital.has(x.id) ? '⭐ ' : ''}${x.rec ? '🔁 ' : ''}${esc(x.title)}<small>${[x.rec ? recText(x.rec) : '', x.ts ? '🕘 ' + timeTxt(x) : '', '~' + fmtH(hOf(x)), x.due ? 'hạn ' + fmtD(x.due) : '', stOf(x) !== 'todo' ? STATUS[stOf(x)][1] + ' ' + STATUS[stOf(x)][0] : '', pl && !x.rec ? '✓ đã xếp ' + pl.map(fmtD).join(', ') : ''].filter(Boolean).join(' · ')}</small>${x.desc ? `<small class="bdesc">${esc(x.desc)}</small>` : ''}</div>
       </div>`; };
   const BGX = [[-1, '✍ Việc thêm tay'], ...BG];
   $('#backlog').innerHTML = BGX.filter(([q]) => q === -1 || showAll || q >= 1 && q <= 3).map(([q, name]) => {
@@ -354,13 +406,15 @@ function renderPlan() {
 
   applyBK(back.filter(x => !x.done && (x.noA || quadOf(x) >= 1 && quadOf(x) <= 3) && !planned[x.id]).length);
 
-  /* dữ liệu theo ngày */
-  const by = {}; plan.forEach(e => (by[e.date] = by[e.date] || []).push(e));
-  const en = e => {
-    const x = e.taskId && taskOf(e.taskId), q = x ? quadOf(x) : null, lt = x && !x.rec && x.due && e.date > x.due;
-    return `<div class="en ${qcls(q)} ${e.done ? 'done' : ''} ${lt ? 'late' : ''}" draggable="true" data-en="${e.id}">
+  /* dữ liệu theo ngày (đã sắp theo mức ưu tiên) */
+  const by = buildBy(P);
+  const en = it => {
+    const e = it.e, x = e.taskId && taskOf(e.taskId), q = x ? quadOf(x) : null, end = e.end && e.end > e.date ? e.end : e.date;
+    const lt = x && !x.rec && x.due && end > x.due;
+    const meta = [e.ts ? '🕘 ' + timeTxt(e) : '', it.clash ? '⚠ trùng giờ' : '', it.h ? fmtH(it.h) + (it.n > 1 ? '/ngày' : '') : '', it.n > 1 ? `ngày ${it.i}/${it.n} · ${fmtD(e.date)}–${fmtD(end)}` : '', e.note ? esc(e.note) : '', lt ? '⚠ sau hạn ' + fmtD(x.due) : ''].filter(Boolean).join(' · ');
+    return `<div class="en ${qcls(q)} ${e.done ? 'done' : ''} ${lt || it.clash ? 'late' : ''}" draggable="true" data-en="${e.id}">
       <input type="checkbox" data-endone="${e.id}" ${e.done ? 'checked' : ''}>
-      <div class="et" data-enedit="${e.id}" title="${esc(x && x.desc ? x.desc : 'Bấm để sửa')}">${x && P.vital.has(x.id) ? '⭐ ' : ''}${e.ro ? '🔁 ' : ''}${esc(e.title)}<small>${[e.hours ? fmtH(e.hours) : '', e.note ? esc(e.note) : '', lt ? '⚠ sau hạn ' + fmtD(x.due) : ''].filter(Boolean).join(' · ')}</small></div></div>`;
+      <div class="eb"><div class="et" data-enedit="${e.id}" title="${esc(x && x.desc ? x.desc : 'Bấm để sửa')}">${x && P.vital.has(x.id) ? '⭐ ' : ''}${e.ro ? '🔁 ' : ''}${esc(e.title)}${meta ? `<small>${meta}</small>` : ''}</div>${stChip(e, 'data-stcycle')}</div></div>`;
   };
   const col = (k, wide) => {
     const list = by[k] || [], u = hrsOf(list);
@@ -380,16 +434,16 @@ function renderPlan() {
         const list = by[k] || [], h = hrsOf(list), d = pd(k);
         return `<div class="mcell ${k === T0 ? 'today' : ''} ${isWork(d) ? '' : 'off'}" data-d="${k}">
           <div class="mh"><a data-goday="${k}" title="Xem ngày này">${+k.slice(8)}</a><small>${h ? fmtH(h) : ''}</small><button class="madd" data-enadd="${k}" title="Thêm việc">＋</button></div>
-          ${list.slice(0, 3).map(e => { const x = e.taskId && taskOf(e.taskId), q = x ? quadOf(x) : null;
-            return `<div class="mchip ${qcls(q)} ${e.done ? 'done' : ''}" draggable="true" data-en="${e.id}" data-enedit="${e.id}" title="${esc(e.title)}">${e.ro ? '🔁 ' : ''}${esc(e.title)}</div>`; }).join('')}
+          ${list.slice(0, 3).map(it => { const e = it.e, x = e.taskId && taskOf(e.taskId), q = x ? quadOf(x) : null;
+            return `<div class="mchip ${qcls(q)} st-${stOf(e)} ${e.done ? 'done' : ''}" draggable="true" data-en="${e.id}" data-enedit="${e.id}" title="${esc(e.title)} · ${STATUS[stOf(e)][0]}">${it.i > 1 ? '↳ ' : ''}${e.ts ? e.ts + ' ' : ''}${e.ro ? '🔁 ' : ''}${esc(e.title)}</div>`; }).join('')}
           ${list.length > 3 ? `<div class="more" data-goday="${k}">+${list.length - 3} việc nữa</div>` : ''}</div>`;
       }).join('') + '</div>';
   } else if (s.mode === 'year') {
     const y = +f.slice(0, 4), lv = k => { const l = by[k]; if (!l) return 0; const h = hrsOf(l), r = h / SET.cap; return !h ? 1 : r < .34 ? 1 : r < .67 ? 2 : r < 1 ? 3 : 4; };
     view.innerHTML = '<div class="ygrid">' + Array.from({ length: 12 }, (_, m) => {
       const first = new Date(y, m, 1), lead = (first.getDay() + 6) % 7, nd = new Date(y, m + 1, 0).getDate(), pre = y + '-' + String(m + 1).padStart(2, '0');
-      const ml = plan.filter(e => e.date.startsWith(pre));
-      return `<div class="ymonth"><a class="yt" data-gomonth="${pre}-01">Tháng ${m + 1}</a><small>${ml.length ? ml.length + ' việc · ' + fmtH(hrsOf(ml)) : 'trống'}</small>
+      const ml = Object.keys(by).filter(k => k.startsWith(pre)).flatMap(k => by[k]);
+      return `<div class="ymonth"><a class="yt" data-gomonth="${pre}-01">Tháng ${m + 1}</a><small>${ml.length ? new Set(ml.map(p => p.e)).size + ' việc · ' + fmtH(hrsOf(ml)) : 'trống'}</small>
         <div class="ydays">${['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map(x => `<i class="yd">${x}</i>`).join('')}${'<i></i>'.repeat(lead)}${Array.from({ length: nd }, (_, i) => {
           const k = pre + '-' + String(i + 1).padStart(2, '0'), l = by[k] || [];
           return `<a class="ycell l${lv(k)} ${k === T0 ? 'today' : ''}" data-goday="${k}" title="${fmtD(k)}: ${l.length} việc · ${fmtH(hrsOf(l))}">${i + 1}</a>`; }).join('')}</div></div>`;
@@ -403,30 +457,25 @@ function renderPlan() {
   }
 
   /* tóm tắt + nhắc việc chưa vào kế hoạch */
-  const es = plan.filter(e => e.date >= f && e.date <= t), dn = es.filter(e => e.done).length;
+  const ps = datesIn(f, t, 800).flatMap(k => by[k] || []), es = [...new Set(ps.map(p => p.e))], dn = es.filter(e => e.done).length, dg = es.filter(e => stOf(e) === 'doing').length, wt = es.filter(e => stOf(e) === 'wait').length;
   $('#planSum').innerHTML = es.length
-    ? `<b>${labelOf(s)}</b>: ${es.length} việc · <b>${fmtH(hrsOf(es))}</b> kế hoạch · đã xong <b>${dn}/${es.length}</b> (${Math.round(dn / es.length * 100)}%).`
+    ? `<b>${labelOf(s)}</b>: ${es.length} việc · <b>${fmtH(hrsOf(ps))}</b> kế hoạch · hoàn thành <b>${dn}/${es.length}</b> (${Math.round(dn / es.length * 100)}%)${dg ? ` · đang làm ${dg}` : ''}${wt ? ` · chờ/vướng ${wt}` : ''}. <span class="sub">Trong mỗi ngày, việc quan trọng và ⭐ trọng tâm 80/20 được xếp lên đầu.</span>`
     : `<b>${labelOf(s)}</b>: chưa có gì trong kế hoạch. Hãy kéo việc từ kho bên trái vào ngày.`;
   const miss = tasks.filter(x => !x.done && !x.rec && !planned[x.id] && (quadOf(x) === 1 || (x.due && daysTo(x.due) <= 3)));
   $('#planWarn').innerHTML = miss.length
     ? `<div>⚠ Việc gấp / sắp đến hạn nhưng chưa có trong kế hoạch: ${miss.map(x => `<button data-addbk="${x.id}">${esc(x.title)}${x.due ? ' (hạn ' + fmtD(x.due) + ')' : ''}</button>`).join('')}</div>` : '';
 }
 function planText() {
-  const s = ST.plan, [f, t] = rangeOf(s);
+  const s = ST.plan, [f, t] = rangeOf(s), by = buildBy(pareto());
   let out = `KẾ HOẠCH ${labelOf(s).toUpperCase()}\n`;
   datesIn(f, t, 400).forEach(k => {
-    const list = plan.filter(e => e.date === k); if (!list.length) return;
-    out += `\n${longD(k)}:\n` + list.map(e => `- ${e.done ? '[x]' : '[ ]'} ${e.title}${e.hours ? ' (' + fmtH(e.hours) + ')' : ''}${e.note ? ' — ' + e.note : ''}`).join('\n') + '\n';
+    const list = by[k]; if (!list) return;
+    out += `\n${longD(k)}:\n` + list.map(it => `- ${it.e.done ? '[x]' : '[ ]'} ${it.e.ts ? timeTxt(it.e) + ' ' : ''}${it.e.title}${it.h ? ' (' + fmtH(it.h) + (it.n > 1 ? '/ngày, ngày ' + it.i + '/' + it.n : '') + ')' : ''} [${STATUS[stOf(it.e)][0]}]${it.e.note ? ' — ' + it.e.note : ''}`).join('\n') + '\n';
   });
   return out;
 }
-function syncTask(taskId) {
-  const x = taskOf(taskId); if (!x) return;
-  const es = plan.filter(e => e.taskId === taskId);
-  if (es.length && !x.rec) setDone(x, es.every(e => e.done));
-}
 
-/* ----- hộp thoại chi tiết công việc (mô tả, deadline, lặp định kỳ) ----- */
+/* ----- hộp thoại chi tiết công việc (mô tả, deadline, trạng thái, thời gian làm, lặp định kỳ) ----- */
 function recUI() {
   const fr = $('#rFreq').value;
   $('#rNL').hidden = !fr; $('#rDowsW').hidden = fr !== 'weekly'; $('#rDomW').hidden = fr !== 'monthly'; $('#rRange').hidden = !fr;
@@ -445,11 +494,14 @@ function openTask(id, preset = {}) {
   $('#tHead').textContent = 'Công việc & kế hoạch';   // một hộp thoại duy nhất cho mọi thao tác
   $('#tTitle').value = x ? x.title : (preset.title || ''); $('#tDesc').value = x ? x.desc || '' : '';
   $('#tDue').value = x ? x.due || '' : '';
+  $('#tStatus').value = en ? stOf(en) : x ? stOf(x) : 'todo';
   $('#tHours').value = en ? en.hours || '' : x ? x.hrs || '' : '';
+  $('#tHours').readOnly = false;
+  $('#tTs').value = en ? en.ts || '' : x ? x.ts || '' : ''; $('#tTe').value = en ? en.te || '' : x ? x.te || '' : '';
   $('#pOn').checked = !!en || !!preset.plan; $('#pOn').disabled = !!en;
-  $('#pDate').value = en ? en.date : preset.date || ymd(nextWork(new Date())); $('#pNote').value = en ? en.note || '' : '';
+  $('#pDate').value = en ? en.date : preset.date || ymd(nextWork(new Date())); $('#pEnd').value = en && en.end ? en.end : ''; $('#pNote').value = en ? en.note || '' : '';
   $('#pLabel').textContent = en && en.ro ? 'Lần lặp này' : 'Đưa vào kế hoạch';
-  const pl = x && !en ? plan.filter(e => e.taskId === x.id && !e.done && !e.ro).map(e => fmtD(e.date)) : [];
+  const pl = x && !en ? plan.filter(e => e.taskId === x.id && !e.done && !e.ro).map(e => fmtD(e.date) + (e.end && e.end > e.date ? '–' + fmtD(e.end) : '')) : [];
   $('#pInfo').textContent = pl.length ? '✓ Việc này đã xếp vào: ' + pl.join(', ') : '';
   $('#tUnplan').hidden = !en; $('#tUnplan').textContent = en && en.ro ? 'Bỏ lần này' : 'Gỡ khỏi kế hoạch';
   $('#tNoA').checked = x ? !!x.noA : !!preset.noA;
@@ -458,15 +510,31 @@ function openTask(id, preset = {}) {
   const dows = r.dows && r.dows.length ? r.dows : [new Date().getDay()];
   $$('[data-rdow]').forEach(c => c.checked = dows.includes(+c.dataset.rdow));
   $('#rDom').value = r.dom || new Date().getDate(); $('#rStart').value = r.start || T0; $('#rUntil').value = r.until || '';
-  $('#tDel').hidden = !x; recUI(); $('#dlgT').showModal(); $('#tTitle').focus();
+  $('#tDel').hidden = !x; recUI(); hoursUI(); $('#dlgT').showModal(); $('#tTitle').focus();
 }
+/* Giờ dự kiến: có "từ giờ – đến giờ" thì tự suy ra (khóa ô nhập); không có thì bạn nhập số */
+function hoursUI() {
+  const inp = $('#tHours'), d = timeHours($('#tTs').value, $('#tTe').value);
+  if (d) {
+    const n = $('#pOn').checked && $('#pDate').value ? entDates({ date: $('#pDate').value, end: $('#pEnd').value }).length : 1;
+    inp.value = Math.round(d * n * 100) / 100; inp.readOnly = true;
+    $('#hHint').textContent = `Tự tính: ${fmtH(d)}/ngày${n > 1 ? ' × ' + n + ' ngày' : ''} từ giờ làm`;
+  } else {
+    if (inp.readOnly) inp.value = '';
+    inp.readOnly = false; $('#hHint').textContent = 'Nhập số giờ, hoặc nhập “Từ giờ – Đến giờ” để tự tính';
+  }
+}
+['#tTs', '#tTe', '#pDate', '#pEnd'].forEach(id => $(id).addEventListener('input', hoursUI));
+['#tTs', '#tTe', '#pDate', '#pEnd', '#pOn'].forEach(id => $(id).addEventListener('change', hoursUI));
 function saveTask() {
   const id = $('#tId').value, title = $('#tTitle').value.trim(); if (!title) return;
   let x = id ? taskOf(id) : null;
-  if (!x) { x = { id: uid(), done: false, urgent: null, important: null, aI: true, aE: true, impact: 3, effort: 2, hid: !!tPreset.hid }; tasks.push(x); }
-  const wasRec = JSON.stringify(x.rec || null), entryId = $('#tEntry').value, hv = parseFloat(String($('#tHours').value).replace(',', '.')) || 0;
+  if (!x) { x = { id: uid(), done: false, status: 'todo', urgent: null, important: null, aI: true, aE: true, impact: 3, effort: 2, hid: !!tPreset.hid }; tasks.push(x); }
+  const wasRec = JSON.stringify([x.rec || null, x.ts || '', x.te || '']), entryId = $('#tEntry').value, sv = $('#tStatus').value;
+  let hv = parseFloat(String($('#tHours').value).replace(',', '.')) || 0;
+  const ts = $('#tTs').value, te = ts && $('#tTe').value > ts ? $('#tTe').value : '';        // giờ kết thúc phải sau giờ bắt đầu
   Object.assign(x, { title, desc: $('#tDesc').value.trim(), due: $('#tDue').value || '', noA: $('#tNoA').checked });
-  if (!(entryId && x.rec)) x.hrs = hv;                 // sửa riêng một lần lặp thì không đổi giờ mặc định của cả chuỗi
+  if (!(entryId && x.rec)) { x.hrs = timeHours(ts, te) || hv; x.ts = ts; x.te = te; }   // có khung giờ thì giờ mặc định = độ dài khung giờ (mỗi ngày)   // sửa riêng một lần lặp thì không đổi giờ/khung giờ mặc định của cả chuỗi
   if (!x.noA) x.hid = false;                           // việc đã đưa vào phân tích thì hiện trong kho
   const iv = $('#tImpact').value, ev = $('#tEffort').value;
   x.aI = iv === 'auto'; if (!x.aI) x.impact = +iv; x.aE = ev === 'auto'; if (!x.aE) x.effort = +ev;
@@ -477,15 +545,28 @@ function saveTask() {
     x.rec = { freq: fr, n: Math.max(1, +$('#rN').value || 1), dows: $$('[data-rdow]').filter(c => c.checked).map(c => +c.dataset.rdow),
       dom: Math.min(31, Math.max(1, +$('#rDom').value || 1)), start: $('#rStart').value || T0, until: $('#rUntil').value || '', hours: x.hrs || 0, skip: (x.rec && x.rec.skip) || [] };
   } else delete x.rec;
-  if (JSON.stringify(x.rec || null) !== wasRec) dropFuture(x.id);   // đổi lịch lặp → sinh lại các lần tương lai
+  if (JSON.stringify([x.rec || null, x.ts || '', x.te || '']) !== wasRec) dropFuture(x.id);   // đổi lịch lặp / khung giờ → sinh lại các lần tương lai
   plan.forEach(e => { if (e.taskId === x.id) e.title = title; });
-  /* phần kế hoạch của cùng hộp thoại */
-  const date = $('#pDate').value, note = $('#pNote').value.trim();
-  if (entryId) { const e = plan.find(p => p.id === entryId); if (e) { if (date) e.date = date; e.hours = hv || hOf(x); e.note = note; } }
-  else if ($('#pOn').checked && date) plan.push({ id: uid(), taskId: x.id, title, date, hours: hv || hOf(x), note, done: false, doneAt: '' });
+  /* phần kế hoạch của cùng hộp thoại: thời gian làm (từ ngày – đến ngày) và trạng thái */
+  const date = $('#pDate').value, endV = $('#pEnd').value, note = $('#pNote').value.trim();
+  if (entryId) {
+    const e = plan.find(p => p.id === entryId);
+    if (e) {
+      if (date) e.date = date; e.end = endV && endV > e.date ? endV : ''; e.ts = ts; e.te = te; e.note = note;
+      const auto = timeHours(ts, te) * entDates(e).length;                       // giờ tự tính từ khung giờ × số ngày
+      if (auto) { e.hours = auto; e.hAuto = true; } else { e.hours = hv || hOf(x); e.hAuto = false; }       // có giờ làm → giờ dự kiến suy ra từ giờ làm; không có → dùng số bạn nhập
+      setStatus(e, sv); syncTask(x.id);
+    }
+  } else {
+    if ($('#pOn').checked && date) {
+      const ne = { id: uid(), taskId: x.id, title, date, end: endV && endV > date ? endV : '', ts, te, note, status: sv, done: sv === 'done', doneAt: sv === 'done' ? T0 : '' };
+      const auto = timeHours(ts, te) * entDates(ne).length;
+      ne.hours = auto || hv || hOf(x); ne.hAuto = !!auto; plan.push(ne);
+    }
+    if (stOf(x) !== sv) setTaskStatus(x, sv);
+  }
   $('#dlgT').close(); commit();
 }
-const setDone = (o, v) => { o.done = v; o.doneAt = v ? (o.doneAt || ymd(new Date())) : ''; };
 
 /* ============ vẽ: trang Báo cáo / Dashboard ============ */
 const CATS = ['Hỗ trợ dev/QA', 'Xử lý sự cố', 'Bàn giao & nghiệm thu', 'Quản lý thay đổi', 'Tài liệu yêu cầu', 'Làm việc với khách / stakeholder',
@@ -510,10 +591,13 @@ function renderReport() {
   const s = ST.report, [f, t] = rangeOf(s), P = pareto();
   materialize(f, t);
   $('#pbarReport').innerHTML = pbarHTML('report');
-  const es = plan.filter(e => e.date >= f && e.date <= t), dn = es.filter(e => e.done);
+  /* mục kế hoạch làm nhiều ngày được chia giờ đều theo từng ngày làm việc; chỉ tính phần nằm trong kỳ báo cáo */
+  const ps = plan.flatMap(partsOf).filter(p => p.k >= f && p.k <= t);
+  const es = [...new Set(ps.map(p => p.e))], dn = es.filter(e => e.done);
   const recs = {}; es.filter(e => e.ro).forEach(e => { const r = recs[e.taskId] = recs[e.taskId] || { n: 0, d: 0 }; r.n++; if (e.done) r.d++; });
-  const ph = hrsOf(es), dh = hrsOf(dn);
-  const carry = plan.filter(e => !e.done && e.date < T0).sort((a, b) => a.date < b.date ? -1 : 1);
+  const ph = hrsOf(ps), dh = hrsOf(ps.filter(p => p.e.done));
+  const stc = { todo: 0, doing: 0, wait: 0, done: 0 }; es.forEach(e => stc[stOf(e)]++);
+  const carry = plan.filter(e => !e.done && (e.end && e.end > e.date ? e.end : e.date) < T0).sort((a, b) => a.date < b.date ? -1 : 1);
   const overdue = tasks.filter(x => !x.done && x.due && x.due < T0);
   const planned = new Set(plan.filter(e => !e.done && e.taskId).map(e => e.taskId));
   const unplanned = tasks.filter(x => !x.done && !x.rec && !planned.has(x.id) && (quadOf(x) === 1 || (x.due && daysTo(x.due) <= 3)));
@@ -521,7 +605,7 @@ function renderReport() {
 
   /* ma trận: phân bổ thời gian */
   const qk = e => { const x = e.taskId && taskOf(e.taskId); return x && !x.noA ? quadOf(x) : 'x'; };
-  const useH = ph > 0, qs = {}; es.forEach(e => { const k = qk(e); qs[k] = (qs[k] || 0) + (useH ? (e.hours || 0) : 1); });
+  const useH = ph > 0, qs = {}; ps.forEach(p => { const k = qk(p.e); qs[k] = (qs[k] || 0) + (useH ? p.h : 1 / p.n); });
   const qt = Object.values(qs).reduce((a, b) => a + b, 0);
   const ord = [1, 2, 3, 4, 0, 'x'].filter(k => qs[k]);
   const share = k => pct(qs[k] || 0, qt);
@@ -536,12 +620,12 @@ function renderReport() {
   const span = datesIn(f, t, 800).length, mode = span <= 31 ? 'd' : span <= 100 ? 'w' : 'm';
   const bkey = k => mode === 'd' ? k : mode === 'w' ? monOf(k) : k.slice(0, 7);
   const bmap = new Map(); datesIn(f, t, 800).forEach(k => { const b = bkey(k); if (!bmap.has(b)) bmap.set(b, { k: b, p: 0, d: 0, label: mode === 'm' ? 'T' + b.slice(5) : fmtD(b) }); });
-  es.forEach(e => { const b = bmap.get(bkey(e.date)); if (b) { b.p += e.hours || 0; if (e.done) b.d += e.hours || 0; } });
+  ps.forEach(p => { const b = bmap.get(bkey(p.k)); if (b) { b.p += p.h; if (p.e.done) b.d += p.h; } });
   /* loại việc BA */
-  const cm = {}; es.forEach(e => { const x = e.taskId && taskOf(e.taskId), c = catOf(x ? x.title : e.title); cm[c] = cm[c] || { h: 0, n: 0 }; cm[c].h += e.hours || 0; cm[c].n++; });
+  const cm = {}; ps.forEach(p => { const e = p.e, x = e.taskId && taskOf(e.taskId), c = catOf(x ? x.title : e.title); cm[c] = cm[c] || { h: 0, n: 0 }; cm[c].h += p.h; cm[c].n += 1 / p.n; });
   const cl = Object.entries(cm).sort((a, b) => (useH ? b[1].h - a[1].h : b[1].n - a[1].n)), cmax = Math.max(1, ...cl.map(([, v]) => useH ? v.h : v.n));
   /* 80/20 */
-  const vh = es.filter(e => P.vital.has(e.taskId)), vShare = pct(useH ? hrsOf(vh) : vh.length, useH ? ph : es.length);
+  const vh = es.filter(e => P.vital.has(e.taskId)), vShare = pct(useH ? hrsOf(ps.filter(p => P.vital.has(p.e.taskId))) : vh.length, useH ? ph : es.length);
   /* đúng hạn */
   const fin = tasks.filter(x => x.done && x.doneAt && x.due && x.doneAt >= f && x.doneAt <= t), ontime = fin.filter(x => x.doneAt <= x.due);
 
@@ -554,14 +638,17 @@ function renderReport() {
     </div>
     <div class="rgrid">
       ${sec('🧭 Thời gian dành cho từng ô ma trận', qt ? `<div class="stack">${ord.map(k => `<i class="sg${k}" style="width:${share(k)}%" title="${QN[k]}: ${share(k)}%"></i>`).join('')}</div>
-        <div class="legend2">${ord.map(k => `<div><i class="sg${k}"></i>${QN[k]}<b>${useH ? fmtH(qs[k]) : qs[k] + ' việc'} · ${share(k)}%</b></div>`).join('')}</div>
+        <div class="legend2">${ord.map(k => `<div><i class="sg${k}"></i>${QN[k]}<b>${useH ? fmtH(qs[k]) : Math.round(qs[k]) + ' việc'} · ${share(k)}%</b></div>`).join('')}</div>
         ${adv.map(a => `<p class="insight">${a}</p>`).join('')}` : '<div class="empty">Chưa có dữ liệu trong khoảng này.</div>', 'span2')}
       ${sec('📈 Giờ kế hoạch so với giờ đã xong', bmap.size && ph ? trendSVG([...bmap.values()], mode === 'd' ? SET.cap : 0) + '<div class="sub"><i class="dot tr-pd"></i>Kế hoạch &nbsp; <i class="dot tr-dd"></i>Đã xong · nhóm theo ' + (mode === 'd' ? 'ngày' : mode === 'w' ? 'tuần' : 'tháng') + '</div>' : '<div class="empty">Chưa có giờ kế hoạch trong khoảng này.</div>', 'span2')}
-      ${sec('🗂 Thời gian theo loại việc BA', cl.length ? cl.map(([c, v]) => `<div class="hb"><span>${esc(c)}</span><div class="hbar"><i style="width:${(useH ? v.h : v.n) / cmax * 100}%"></i></div><b>${useH ? fmtH(v.h) : v.n}</b></div>`).join('') : '<div class="empty">Chưa có dữ liệu.</div>')}
+      ${sec('🗂 Thời gian theo loại việc BA', cl.length ? cl.map(([c, v]) => `<div class="hb"><span>${esc(c)}</span><div class="hbar"><i style="width:${(useH ? v.h : v.n) / cmax * 100}%"></i></div><b>${useH ? fmtH(v.h) : Math.round(v.n)}</b></div>`).join('') : '<div class="empty">Chưa có dữ liệu.</div>')}
       ${sec('⭐ Tập trung vào việc trọng tâm (80/20)', es.length ? `<div class="gauge"><i style="width:${vShare}%"></i></div><p><b>${vShare}%</b> ${useH ? 'số giờ' : 'số việc'} dành cho việc ⭐ trọng tâm.</p>
         <p class="sub">${vShare >= 60 ? '✅ Rất tốt — bạn đang dồn sức đúng chỗ.' : '👉 Mục tiêu ≥ 60%. Hãy xếp việc ⭐ vào đầu ngày, lúc tập trung nhất.'}</p>` : '<div class="empty">Chưa có dữ liệu.</div>')}
       ${sec('⏱ Hoàn thành đúng hạn', fin.length ? `<div class="gauge"><i style="width:${pct(ontime.length, fin.length)}%"></i></div><p><b>${pct(ontime.length, fin.length)}%</b> đúng hạn (${ontime.length}/${fin.length} việc có hạn chót đã xong trong kỳ).</p>
         ${fin.filter(x => x.doneAt > x.due).map(x => `<div class="li">⚠ ${esc(x.title)} <span class="sub">— hạn ${fmtD(x.due)}, xong ${fmtD(x.doneAt)}</span></div>`).join('')}` : '<div class="empty">Chưa có việc có hạn chót nào hoàn thành trong kỳ này (hệ thống ghi nhận ngày hoàn thành từ khi bạn tick xong).</div>')}
+      ${sec('📌 Trạng thái công việc trong kỳ', es.length ? `<div class="stack">${STORDER.filter(k => stc[k]).map(k => `<i class="stb-${k}" style="width:${pct(stc[k], es.length)}%" title="${STATUS[k][0]}: ${stc[k]}"></i>`).join('')}</div>
+        <div class="legend2">${STORDER.map(k => `<div><i class="stb-${k}"></i>${STATUS[k][1]} ${STATUS[k][0]}<b>${stc[k]} · ${pct(stc[k], es.length)}%</b></div>`).join('')}</div>
+        ${stc.wait ? `<p class="insight">⏸ ${stc.wait} việc đang chờ / vướng — hãy xem ai cần được nhắc hoặc cần gỡ khó khăn gì để việc tiếp tục.</p>` : ''}` : '<div class="empty">Chưa có dữ liệu.</div>')}
       ${sec('🔁 Việc định kỳ', Object.keys(recs).length ? Object.entries(recs).map(([id, r]) => { const x = taskOf(id); return `<div class="hb"><span>${esc(x ? x.title : '(đã xóa)')}<small class="sub" style="display:block">${x ? recText(x.rec) : ''}</small></span><div class="hbar"><i style="width:${pct(r.d, r.n)}%"></i></div><b>${r.d}/${r.n}</b></div>`; }).join('') + '<div class="sub">Tỷ lệ làm đủ các lần lặp trong kỳ — việc nào thấp liên tục nên xem lại tần suất hoặc ủy quyền.</div>' : '<div class="empty">Chưa có việc định kỳ nào trong kỳ này. Tạo bằng nút ✎ → “Lặp lại định kỳ”.</div>')}
       ${sec('🚨 Cần xử lý ngay', `
         ${carry.length ? `<h4>Việc dồn lại (đã qua ngày kế hoạch nhưng chưa xong) <button data-mvall>Dời tất cả sang hôm nay</button></h4>${carry.slice(0, 8).map(e => `<div class="li">${esc(e.title)} <span class="sub">— ${fmtD(e.date)}</span> <button data-mv="${e.id}">→ Hôm nay</button></div>`).join('')}${carry.length > 8 ? `<div class="sub">… và ${carry.length - 8} việc nữa</div>` : ''}` : ''}
@@ -572,10 +659,10 @@ function renderReport() {
 }
 function csvReport() {
   const [f, t] = rangeOf(ST.report), q = c => '"' + String(c).replace(/"/g, '""') + '"';
-  const rows = [['Ngày', 'Việc', 'Giờ', 'Trạng thái', 'Ô ma trận', 'Loại việc', 'Ghi chú']];
-  plan.filter(e => e.date >= f && e.date <= t).sort((a, b) => a.date < b.date ? -1 : 1).forEach(e => {
+  const rows = [['Từ ngày', 'Đến ngày', 'Từ giờ', 'Đến giờ', 'Việc', 'Giờ (tổng)', 'Trạng thái', 'Ô ma trận', 'Loại việc', 'Ghi chú']];
+  plan.filter(e => e.date <= t && (e.end && e.end > e.date ? e.end : e.date) >= f).sort((a, b) => a.date < b.date ? -1 : 1).forEach(e => {
     const x = e.taskId && taskOf(e.taskId);
-    rows.push([e.date, e.title, e.hours || 0, e.done ? 'Đã xong' : 'Chưa xong', QN[x ? quadOf(x) : 'x'], catOf(x ? x.title : e.title), e.note || '']);
+    rows.push([e.date, e.end && e.end > e.date ? e.end : e.date, e.ts || '', e.te || '', e.title, e.hours || 0, STATUS[stOf(e)][0], QN[x && !x.noA ? quadOf(x) : 'x'], catOf(x ? x.title : e.title), e.note || '']);
   });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }));
@@ -662,6 +749,12 @@ document.addEventListener('click', e => {
   if (route === 'plan' && BK.open && !BK.pinned && !e.target.closest('.backlog,#bkToggle,dialog,[data-addbk]')) { BK.open = false; saveBK(); renderPlan(); }
   const g = a => e.target.closest('[' + a + ']'); let el;
   if (el = g('data-tog')) { const t = taskOf(el.dataset.tog), f = el.dataset.f; t[f] = t[f] == null ? true : (t[f] ? false : null); t.note = t.tip = ''; commit(); }
+  else if (el = g('data-stcycle')) {           // đổi trạng thái một mục kế hoạch: chưa bắt đầu → đang làm → chờ/vướng → hoàn thành
+    const it = plan.find(x => x.id === el.dataset.stcycle); setStatus(it, STORDER[(STORDER.indexOf(stOf(it)) + 1) % STORDER.length]); syncTask(it.taskId); commit();
+  }
+  else if (el = g('data-tstcycle')) {          // đổi trạng thái của việc (ở trang Phân tích)
+    const x = taskOf(el.dataset.tstcycle); setTaskStatus(x, STORDER[(STORDER.indexOf(stOf(x)) + 1) % STORDER.length]); commit();
+  }
   else if (el = g('data-apply')) { const t = taskOf(el.dataset.apply), s = suggest(t); t.urgent = s.urgent; t.important = s.important; commit(); }
   else if (g('data-applyall')) { tasks.filter(t => !t.done && quadOf(t) === 0).forEach(t => { const s = suggest(t); t.urgent = s.urgent; t.important = s.important; }); commit(); }
   else if (el = g('data-del')) { const id = el.dataset.del; tasks = tasks.filter(x => x.id !== id); plan = plan.filter(x => x.taskId !== id); commit(); }
@@ -736,8 +829,8 @@ document.addEventListener('drop', e => {
   if (drag.k === 'bk') {
     if (!BK.pinned) { BK.open = false; saveBK(); }     // kho nổi: dùng xong tự đóng
     const t = taskOf(drag.id);
-    plan.push({ id: uid(), taskId: t.id, title: t.title, date: dc.dataset.d, hours: hOf(t), note: '', done: false });
-  } else plan.find(x => x.id === drag.id).date = dc.dataset.d;
+    plan.push({ id: uid(), taskId: t.id, title: t.title, date: dc.dataset.d, hours: hOf(t), note: '', status: 'todo', done: false });
+  } else shiftEntry(plan.find(x => x.id === drag.id), dc.dataset.d);      // dời cả khoảng nhiều ngày, giữ nguyên độ dài
   drag = null; commit();
 });
 

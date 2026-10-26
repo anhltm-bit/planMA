@@ -296,3 +296,22 @@ dialog#dlgT{width:min(620px,94vw)}
 .plan-layout.float .backlog{position:absolute;left:0;top:0;bottom:0;width:330px;max-width:92%;height:auto;z-index:20;box-shadow:0 12px 34px rgba(16,24,40,.28)}
 .plan-layout.float.dragmode .backlog{opacity:.28;pointer-events:none}
 @media (max-width:1100px){.plan-layout.float .backlog{position:static;width:auto;box-shadow:none;max-width:none}.plan-layout.float.dragmode .backlog{opacity:1;pointer-events:auto}}
+
+/* ===== v1.7: trạng thái, việc nhiều ngày ===== */
+.st{display:inline-block;border-radius:99px;padding:0 9px;font-size:11px;cursor:pointer;user-select:none;border:1px solid var(--line);background:var(--soft);color:var(--muted);white-space:nowrap}
+.st:hover{filter:brightness(.96)}
+.st-doing{background:#e3edff;color:#1f4fd8;border-color:#bcd0ff}
+.st-wait{background:#fff1d6;color:#a35f00;border-color:#f2cf8a}
+.st-done{background:#dff5e8;color:#1b7a4a;border-color:#a7dfc0}
+@media (prefers-color-scheme:dark){.st-doing{background:#1c2a4d;color:#9db8ff;border-color:#2c417a}.st-wait{background:#3a2c14;color:#f0b25a;border-color:#6a4b1e}.st-done{background:#16352a;color:#6fd3a0;border-color:#24593f}}
+.eb{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+.eb .et{width:100%}
+.mchip.st-doing{background:#e3edff}.mchip.st-wait{background:#fff1d6}
+.stb-todo{background:var(--line)}.stb-doing{background:#5b8def}.stb-wait{background:#f0a73c}.stb-done{background:var(--q2)}
+.meta .st{margin-right:2px}
+.timerow{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-end}
+.timerow label{flex-direction:column}
+.timerow input[type=time]{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--text)}
+.timerow .sub{flex:1 1 100%}
+#tHours[readonly]{background:var(--soft);color:var(--muted);cursor:not-allowed}
+.eg label .sub{display:block;margin-top:2px}
